@@ -1,0 +1,139 @@
+"""Gemini-backed answer generation for the construction RAG assistant."""
+from __future__ import annotations
+
+import logging
+from typing import Any, Optional
+
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+SYSTEM_INSTRUCTION = (
+    "You are a senior assistant for a construction company. "
+    "You help engineers, project managers, QA/QS, and site staff understand "
+    "their project documents (drawings, specifications, BOQs, contracts, RFIs, "
+    "submittals, safety reports, inspection reports, permits, etc.). "
+    "Always answer ONLY using the provided context excerpts from the project. "
+    "If the answer is not contained in the context, say you cannot find it in "
+    "the available documents and suggest which document type might contain it. "
+    "Be precise with quantities, units, dates, clause numbers, drawing numbers, "
+    "and revisions when they appear in the context. "
+    "Cite each fact inline as [n] using the source numbers given to you."
+)
+
+
+_client = None
+
+
+def _get_client():
+    global _client
+    if _client is not None:
+        return _client
+    api_key = getattr(settings, "GEMINI_API_KEY", "") or ""
+    if not api_key:
+        return None
+    try:
+        from google import genai
+
+        _client = genai.Client(api_key=api_key)
+        return _client
+    except Exception:  # pragma: no cover - best effort
+        logger.exception("Failed to initialise Gemini client")
+        return None
+
+
+def _format_contexts(contexts: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for i, c in enumerate(contexts, start=1):
+        title = c.get("document_title") or f"document #{c.get('document_id')}"
+        dtype = c.get("document_type") or "document"
+        discipline = c.get("discipline") or ""
+        revision = c.get("revision") or ""
+        meta_bits = [f"type={dtype}", f"page={c.get('page', '?')}"]
+        if discipline:
+            meta_bits.append(f"discipline={discipline}")
+        if revision:
+            meta_bits.append(f"rev={revision}")
+        header = f"[{i}] {title} ({', '.join(meta_bits)})"
+        body = (c.get("text") or "").strip()
+        lines.append(f"{header}\n{body}")
+    return "\n\n".join(lines)
+
+
+def _build_user_prompt(
+    query: str,
+    contexts: list[dict[str, Any]],
+    project: Optional[dict[str, Any]] = None,
+) -> str:
+    project_block = ""
+    if project:
+        project_block = (
+            "Project information:\n"
+            f"- Code: {project.get('project_code', '')}\n"
+            f"- Name: {project.get('name', '')}\n"
+            f"- Client: {project.get('client_name', '')}\n"
+            f"- Location: {project.get('location', '')}\n"
+            f"- Type: {project.get('project_type', '')}\n"
+            f"- Status: {project.get('status', '')}\n\n"
+        )
+    context_block = _format_contexts(contexts) if contexts else "(no context retrieved)"
+    return (
+        f"{project_block}"
+        "Use ONLY the following retrieved excerpts to answer the question. "
+        "Cite sources inline as [n] matching the numbers below.\n\n"
+        f"Context:\n{context_block}\n\n"
+        f"Question: {query}\n"
+        "Answer:"
+    )
+
+
+def _fallback_answer(query: str, contexts: list[dict[str, Any]]) -> str:
+    if not contexts:
+        return (
+            "No relevant passages were found in this project's documents. "
+            "Try uploading the relevant drawings, specifications, BOQ, or contract."
+        )
+    bullets = []
+    for i, c in enumerate(contexts, start=1):
+        snippet = (c.get("text") or "")[:300]
+        title = c.get("document_title") or f"document #{c.get('document_id')}"
+        bullets.append(f"[{i}] {title} (page {c.get('page', '?')}): {snippet}")
+    joined = "\n".join(bullets)
+    return (
+        f"(Gemini not configured — returning extractive summary for: \"{query}\")\n\n"
+        f"{joined}"
+    )
+
+
+def generate_answer(
+    query: str,
+    contexts: list[dict[str, Any]],
+    project: Optional[dict[str, Any]] = None,
+) -> str:
+    """Generate a construction-domain answer with Gemini, falling back to an
+    extractive summary if Gemini is not configured or errors out."""
+    client = _get_client()
+    if client is None:
+        return _fallback_answer(query, contexts)
+
+    model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
+    prompt = _build_user_prompt(query, contexts, project=project)
+
+    try:
+        from google.genai import types
+
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                temperature=0.2,
+            ),
+        )
+        text = (getattr(response, "text", "") or "").strip()
+        if not text:
+            return _fallback_answer(query, contexts)
+        return text
+    except Exception:
+        logger.exception("Gemini generate_content failed")
+        return _fallback_answer(query, contexts)

@@ -1,0 +1,9 @@
+db.sqlite3
+media/
+*.pyc
+__pycache__/
+*.egg-info/
+.venv/
+venv/
+torch/
+sentence_transformers_cache/
