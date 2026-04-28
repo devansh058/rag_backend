@@ -1,11 +1,24 @@
+# Optional: only needed if you don't already have a Postgres instance with the
+# `vector` extension installed locally. If you do, ignore this file and just
+# run `CREATE EXTENSION IF NOT EXISTS vector;` once on your DB (the Django
+# migration also does this for you when it runs).
+
 services:
-  qdrant:
-    image: qdrant/qdrant:latest
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rag_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "5432:5432"
     volumes:
-      - qdrant_storage:/qdrant/storage
+      - pg_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
 
 volumes:
-  qdrant_storage:
+  pg_data:

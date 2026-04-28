@@ -1,14 +1,10 @@
-"""Vector retrieval with Qdrant-side filtering and result deduplication."""
+"""pgvector-backed similarity search with server-side filtering and dedup."""
 from __future__ import annotations
 
 import logging
 from typing import Any, Optional, Sequence
 
-from django.conf import settings
-from qdrant_client.http import models as qmodels
-
 from services.embedder import embed_query
-from services.vector_store import ensure_collection, get_client
 
 logger = logging.getLogger(__name__)
 
@@ -24,54 +20,47 @@ def retrieve(
     language: Optional[str] = None,
     document_type: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """Vector-search Qdrant with server-side filters; dedupe identical chunk text."""
-    ensure_collection()
+    """Cosine-similarity search over the `Chunk` table, scoped to a project."""
+    from apps.rag.models import Chunk
+    from pgvector.django import CosineDistance
+
     vector = embed_query(query)
-    client = get_client()
-    name = settings.QDRANT_COLLECTION
 
-    must: list[qmodels.FieldCondition] = [
-        qmodels.FieldCondition(
-            key="project_id",
-            match=qmodels.MatchValue(value=project_id),
-        )
-    ]
+    qs = Chunk.objects.filter(project_id=project_id)
     if tags:
-        must.append(qmodels.FieldCondition(key="tags", match=qmodels.MatchAny(any=list(tags))))
+        qs = qs.filter(tags__overlap=list(tags))
     if language:
-        must.append(qmodels.FieldCondition(key="language", match=qmodels.MatchValue(value=language)))
+        qs = qs.filter(language=language)
     if document_type:
-        must.append(qmodels.FieldCondition(key="document_type", match=qmodels.MatchValue(value=document_type)))
+        qs = qs.filter(document_type=document_type)
 
-    flt = qmodels.Filter(must=must)
     over_fetch = max(SEARCH_LIMIT, limit * 2)
-    resp = client.query_points(
-        collection_name=name,
-        query=vector,
-        query_filter=flt,
-        limit=over_fetch,
-    )
+    qs = qs.annotate(distance=CosineDistance("embedding", vector)).order_by("distance")[:over_fetch]
 
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
-    for h in resp.points:
-        payload = h.payload or {}
-        text = (payload.get("text") or "").strip()
+    fetched = 0
+    for c in qs.iterator():
+        fetched += 1
+        text = (c.text or "").strip()
         if not text or text in seen:
             continue
         seen.add(text)
+        # Cosine distance is in [0, 2]; similarity in [-1, 1]. For typical normalized
+        # embeddings (>= 0 dot product) similarity in [0, 1].
+        score = 1.0 - float(c.distance) if c.distance is not None else None
         out.append(
             {
                 "text": text,
-                "page": payload.get("page", 0),
-                "document_id": payload.get("document_id"),
-                "document_title": payload.get("document_title", ""),
-                "document_type": payload.get("document_type", ""),
-                "discipline": payload.get("discipline", ""),
-                "revision": payload.get("revision", ""),
-                "tags": payload.get("tags", []),
-                "language": payload.get("language", "unknown"),
-                "score": h.score,
+                "page": c.page,
+                "document_id": c.document_id,
+                "document_title": c.document_title or "",
+                "document_type": c.document_type or "",
+                "discipline": c.discipline or "",
+                "revision": c.revision or "",
+                "tags": list(c.tags or []),
+                "language": c.language or "unknown",
+                "score": score,
             }
         )
         if len(out) >= limit:
@@ -82,6 +71,6 @@ def retrieve(
         project_id,
         len(query),
         len(out),
-        len(resp.points),
+        fetched,
     )
     return out
