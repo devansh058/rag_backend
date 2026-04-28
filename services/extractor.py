@@ -1,38 +1,84 @@
-import os
-from typing import Any
+"""Extraction with junk-removal and page-by-page streaming."""
+from __future__ import annotations
 
-import fitz
-import pytesseract  # requires the `tesseract` binary installed (e.g. `brew install tesseract` on macOS)
-from PIL import Image
+import os
+from typing import Any, Iterator, Optional
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".tiff", ".bmp"}
 
+SKIP_PAGE_KEYWORDS = (
+    "table of contents",
+    "contents",
+    "preface",
+    "introduction",
+)
 
-def extract_text(path: str) -> list[dict[str, Any]]:
+
+def clean_text(text: Optional[str]) -> Optional[str]:
+    """Drop boilerplate / noisy lines. Return None when the page is junk."""
+    if not text:
+        return None
+
+    text_lower = text.lower()
+
+    if any(keyword in text_lower for keyword in SKIP_PAGE_KEYWORDS):
+        return None
+
+    cleaned_lines: list[str] = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if len(line) < 3:
+            continue
+        if line.lower().startswith("page "):
+            continue
+        cleaned_lines.append(line)
+
+    cleaned = "\n".join(cleaned_lines).strip()
+    return cleaned or None
+
+
+def iter_pages(path: str) -> Iterator[dict[str, Any]]:
+    """Yield cleaned `{page, text}` dicts one page at a time.
+
+    Streaming-friendly so large PDFs don't have to live in memory.
+    """
     ext = os.path.splitext(path)[1].lower()
     if ext == ".pdf":
-        return _extract_pdf(path)
-    if ext in IMAGE_EXTENSIONS:
-        return _extract_image(path)
-    raise ValueError(f"Unsupported file type: {ext or 'unknown'}")
+        yield from _iter_pdf(path)
+    elif ext in IMAGE_EXTENSIONS:
+        yield from _iter_image(path)
+    else:
+        raise ValueError(f"Unsupported file type: {ext or 'unknown'}")
 
 
-def _extract_pdf(path: str) -> list[dict[str, Any]]:
+def extract_text(path: str) -> list[dict[str, Any]]:
+    """Backward-compatible: materialise all cleaned pages into a list."""
+    return list(iter_pages(path))
+
+
+def _iter_pdf(path: str) -> Iterator[dict[str, Any]]:
+    import fitz  # local import so optional deps don't break import-time
+
     doc = fitz.open(path)
-    pages: list[dict[str, Any]] = []
     try:
         for i in range(len(doc)):
-            page = doc.load_page(i)
-            text = page.get_text() or ""
-            pages.append({"page": i, "text": text.strip()})
+            raw = doc.load_page(i).get_text() or ""
+            cleaned = clean_text(raw)
+            if cleaned:
+                yield {"page": i, "text": cleaned}
     finally:
         doc.close()
-    return pages
 
 
-def _extract_image(path: str) -> list[dict[str, Any]]:
+def _iter_image(path: str) -> Iterator[dict[str, Any]]:
+    # `pytesseract` requires the `tesseract` binary (e.g. `brew install tesseract`).
+    import pytesseract
+    from PIL import Image
+
     image = Image.open(path)
     if image.mode not in ("RGB", "L"):
         image = image.convert("RGB")
-    text = pytesseract.image_to_string(image)
-    return [{"page": 0, "text": text.strip()}]
+    raw = pytesseract.image_to_string(image) or ""
+    cleaned = clean_text(raw)
+    if cleaned:
+        yield {"page": 0, "text": cleaned}

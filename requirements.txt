@@ -9,3 +9,4 @@ pillow>=10.0
 sentence-transformers>=2.2
 qdrant-client>=1.7
 google-genai>=1.0
+langdetect>=1.0.9

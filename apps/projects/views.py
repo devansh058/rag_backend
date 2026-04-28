@@ -48,9 +48,17 @@ class ProjectViewSet(viewsets.ModelViewSet):
         project = self.get_object()
         ser = QuerySerializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        q = ser.validated_data["query"]
+        data = ser.validated_data
+        q = data["query"]
 
-        hits = retrieve(project.id, q, limit=5)
+        hits = retrieve(
+            project.id,
+            q,
+            limit=data.get("top_k") or 5,
+            tags=data.get("tags") or None,
+            language=(data.get("language") or "").strip() or None,
+            document_type=(data.get("document_type") or "").strip() or None,
+        )
 
         project_meta = {
             "project_code": project.project_code,
@@ -71,6 +79,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 "document_type": h.get("document_type", ""),
                 "discipline": h.get("discipline", ""),
                 "revision": h.get("revision", ""),
+                "tags": h.get("tags", []),
+                "language": h.get("language", "unknown"),
                 "score": h.get("score"),
             }
             for h in hits

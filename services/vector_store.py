@@ -1,9 +1,12 @@
+import logging
 import uuid
 from typing import Any, Optional
 
 from django.conf import settings
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
+
+logger = logging.getLogger(__name__)
 
 VECTOR_SIZE = 384  # all-MiniLM-L6-v2
 
@@ -50,9 +53,10 @@ def upsert_chunks(
     chunk_payloads: list[dict[str, Any]],
     vectors: list[list[float]],
     extra_payload: Optional[dict[str, Any]] = None,
-) -> None:
+) -> int:
+    """Upsert chunks into Qdrant. Returns the number of points written."""
     if not chunk_payloads:
-        return
+        return 0
     ensure_collection()
     client = get_client()
     name = settings.QDRANT_COLLECTION
@@ -65,7 +69,16 @@ def upsert_chunks(
             "page": payload["page"],
             "project_id": project_id,
             "document_id": document_id,
+            "tags": payload.get("tags", []),
+            "language": payload.get("language", "unknown"),
         }
         body.update(extra)
         points.append(qmodels.PointStruct(id=pid, vector=vec, payload=body))
     client.upsert(collection_name=name, points=points)
+    logger.info(
+        "vector_store: upserted %d points (document_id=%s, project_id=%s)",
+        len(points),
+        document_id,
+        project_id,
+    )
+    return len(points)

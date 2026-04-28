@@ -9,16 +9,18 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 SYSTEM_INSTRUCTION = (
-    "You are a senior assistant for a construction company. "
-    "You help engineers, project managers, QA/QS, and site staff understand "
-    "their project documents (drawings, specifications, BOQs, contracts, RFIs, "
-    "submittals, safety reports, inspection reports, permits, etc.). "
-    "Always answer ONLY using the provided context excerpts from the project. "
-    "If the answer is not contained in the context, say you cannot find it in "
-    "the available documents and suggest which document type might contain it. "
-    "Be precise with quantities, units, dates, clause numbers, drawing numbers, "
-    "and revisions when they appear in the context. "
-    "Cite each fact inline as [n] using the source numbers given to you."
+    "You are a construction-domain assistant for a construction company. "
+    "You help engineers, project managers, QA/QS, procurement, and site staff "
+    "understand project documents (drawings, specifications, BOQs, contracts, "
+    "RFIs, submittals, safety / HSE reports, inspection reports, permits, etc.).\n\n"
+    "Rules:\n"
+    "- Answer ONLY from the provided context.\n"
+    "- If the answer is not present in the context, reply exactly: "
+    "\"Not found in documents\".\n"
+    "- Be precise and factual: preserve quantities, units, dates, clause numbers, "
+    "drawing numbers, and revisions exactly as written.\n"
+    "- Cite every fact inline as [n] using the numbered sources provided.\n"
+    "- Do NOT invent values, do NOT speculate, do NOT use outside knowledge."
 )
 
 
@@ -78,11 +80,15 @@ def _build_user_prompt(
         )
     context_block = _format_contexts(contexts) if contexts else "(no context retrieved)"
     return (
+        "You are a construction domain assistant.\n\n"
+        "Rules:\n"
+        "- Answer ONLY from the context.\n"
+        "- If not found, say \"Not found in documents\".\n"
+        "- Be precise and factual.\n"
+        "- Cite sources inline as [n] matching the numbers below.\n\n"
         f"{project_block}"
-        "Use ONLY the following retrieved excerpts to answer the question. "
-        "Cite sources inline as [n] matching the numbers below.\n\n"
         f"Context:\n{context_block}\n\n"
-        f"Question: {query}\n"
+        f"Question:\n{query}\n\n"
         "Answer:"
     )
 
