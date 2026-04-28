@@ -7,3 +7,5 @@ __pycache__/
 venv/
 torch/
 sentence_transformers_cache/
+.env
+.env.local

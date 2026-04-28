@@ -3,6 +3,13 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(BASE_DIR / ".env")
+except Exception:  # python-dotenv missing in some environments — fine
+    pass
+
 SECRET_KEY = os.environ.get(
     "DJANGO_SECRET_KEY",
     "django-insecure-change-me-in-production-dev-only",
@@ -58,13 +65,15 @@ WSGI_APPLICATION = "rag_backend.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "rag_db",
-        "USER": "postgres",
-        "PASSWORD": "Devansh@123",
-        "HOST": "localhost",
-        "PORT": "5432",
+        "NAME": os.environ.get("POSTGRES_DB", "rag_db"),
+        "USER": os.environ.get("POSTGRES_USER", "postgres"),
+        "PASSWORD": os.environ.get("POSTGRES_PASSWORD", ""),
+        "HOST": os.environ.get("POSTGRES_HOST", "localhost"),
+        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+        "OPTIONS": {},
     }
 }
+
 sslmode = os.environ.get("POSTGRES_SSLMODE")
 if sslmode:
     DATABASES["default"]["OPTIONS"]["sslmode"] = sslmode
