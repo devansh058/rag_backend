@@ -121,5 +121,10 @@ CELERY_TASK_ALWAYS_EAGER = os.environ.get("CELERY_TASK_ALWAYS_EAGER", "").lower(
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "2048"))
 
 VECTOR_DIMENSIONS = 384  # all-MiniLM-L6-v2
+
+# Celery prefork workers + PyTorch MPS on macOS often SIGABRT — use cpu for workers.
+# Override with EMBEDDING_DEVICE=mps or cuda only if you know what you're doing.
+EMBEDDING_DEVICE = os.environ.get("EMBEDDING_DEVICE", "cpu")

@@ -58,11 +58,29 @@ def extract_text(path: str) -> list[dict[str, Any]]:
 
 def _iter_pdf(path: str) -> Iterator[dict[str, Any]]:
     import fitz  # local import so optional deps don't break import-time
+    from io import BytesIO
+
+    import pytesseract
+    from PIL import Image
 
     doc = fitz.open(path)
     try:
         for i in range(len(doc)):
-            raw = doc.load_page(i).get_text() or ""
+            page = doc.load_page(i)
+            raw = page.get_text() or ""
+
+            # Scanned / image-only PDFs have no text layer — rasterize and OCR.
+            if not (raw and raw.strip()):
+                try:
+                    mat = fitz.Matrix(2.0, 2.0)
+                    pix = page.get_pixmap(matrix=mat, alpha=False)
+                    img = Image.open(BytesIO(pix.tobytes("png")))
+                    if img.mode not in ("RGB", "L"):
+                        img = img.convert("RGB")
+                    raw = pytesseract.image_to_string(img) or ""
+                except Exception:
+                    raw = ""
+
             cleaned = clean_text(raw)
             if cleaned:
                 yield {"page": i, "text": cleaned}

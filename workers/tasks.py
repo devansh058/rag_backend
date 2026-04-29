@@ -90,8 +90,23 @@ def process_document(document_id: int) -> None:
             total_stored,
         )
 
+        if total_chunks == 0:
+            logger.warning(
+                "process_document: doc=%s produced zero chunks — file may be scanned "
+                "(needs Tesseract: brew install tesseract), empty, wrong type, or every page "
+                "was filtered as boilerplate (TOC/preface). Path=%s",
+                document_id,
+                path,
+            )
+            doc.error_message = (
+                "No text could be extracted. For scanned PDFs install Tesseract "
+                "(brew install tesseract). Ensure the PDF has a text layer or is readable by OCR."
+            )
+        else:
+            doc.error_message = ""
+
         doc.status = Document.Status.DONE
-        doc.save(update_fields=["status"])
+        doc.save(update_fields=["status", "error_message"])
     except Exception as exc:
         tb = traceback.format_exc()
         logger.error("process_document failed: %s", tb)

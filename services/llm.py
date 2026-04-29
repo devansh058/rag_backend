@@ -20,6 +20,9 @@ SYSTEM_INSTRUCTION = (
     "- Be precise and factual: preserve quantities, units, dates, clause numbers, "
     "drawing numbers, and revisions exactly as written.\n"
     "- Cite every fact inline as [n] using the numbered sources provided.\n"
+    "- Give a substantive answer: several well-formed paragraphs or clear bullet lists "
+    "when there are multiple points. Explain each major idea in enough detail that a "
+    "busy site or office reader can act on it, without repeating the same sentence.\n"
     "- Do NOT invent values, do NOT speculate, do NOT use outside knowledge."
 )
 
@@ -85,7 +88,10 @@ def _build_user_prompt(
         "- Answer ONLY from the context.\n"
         "- If not found, say \"Not found in documents\".\n"
         "- Be precise and factual.\n"
-        "- Cite sources inline as [n] matching the numbers below.\n\n"
+        "- Cite sources inline as [n] matching the numbers below.\n"
+        "- Write a thorough answer: aim for multiple sentences or a few short paragraphs; "
+        "use bullet points when several distinct requirements or items appear in the sources. "
+        "Mention relevant numbers, units, drawing refs, and clauses when they appear.\n\n"
         f"{project_block}"
         f"Context:\n{context_block}\n\n"
         f"Question:\n{query}\n\n"
@@ -101,7 +107,7 @@ def _fallback_answer(query: str, contexts: list[dict[str, Any]]) -> str:
         )
     bullets = []
     for i, c in enumerate(contexts, start=1):
-        snippet = (c.get("text") or "")[:300]
+        snippet = (c.get("text") or "")[:900]
         title = c.get("document_title") or f"document #{c.get('document_id')}"
         bullets.append(f"[{i}] {title} (page {c.get('page', '?')}): {snippet}")
     joined = "\n".join(bullets)
@@ -123,6 +129,11 @@ def generate_answer(
         return _fallback_answer(query, contexts)
 
     model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
+    max_tokens = getattr(settings, "GEMINI_MAX_OUTPUT_TOKENS", 2048)
+    try:
+        max_tokens = int(max_tokens)
+    except (TypeError, ValueError):
+        max_tokens = 2048
     prompt = _build_user_prompt(query, contexts, project=project)
 
     try:
@@ -133,7 +144,8 @@ def generate_answer(
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
-                temperature=0.2,
+                temperature=0.35,
+                max_output_tokens=max_tokens,
             ),
         )
         text = (getattr(response, "text", "") or "").strip()
