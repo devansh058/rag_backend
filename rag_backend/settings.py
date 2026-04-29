@@ -125,6 +125,22 @@ GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "2048"
 
 VECTOR_DIMENSIONS = 384  # all-MiniLM-L6-v2
 
-# Celery prefork workers + PyTorch MPS on macOS often SIGABRT — use cpu for workers.
-# Override with EMBEDDING_DEVICE=mps or cuda only if you know what you're doing.
+# -- Tesseract OCR -------------------------------------------------------------
+# Automatic script detection (Tesseract OSD) maps page script → best-effort lang.
+# Requires `osd.traineddata` (ships with most Tesseract installs).
+# Install extra languages: `brew install tesseract-lang` then `tesseract --list-langs`.
+_truthy = ("1", "true", "yes")
+TESSERACT_SCRIPT_DETECTION = os.environ.get(
+    "TESSERACT_SCRIPT_DETECTION", "true"
+).lower() in _truthy
+# When script ≠ Latin, append English if installed (common for mixed business docs).
+TESSERACT_APPEND_ENG = os.environ.get("TESSERACT_APPEND_ENG", "true").lower() in _truthy
+# If non-empty, skip OSD and use this `lang` string only (e.g. eng+rus).
+TESSERACT_LANG = os.environ.get("TESSERACT_LANG", "").strip()
+# If True, also OCR rasterized pages when a text layer exists (slower; mixed image+text).
+PDF_OCR_SUPPLEMENT_TEXT_LAYER = os.environ.get(
+    "PDF_OCR_SUPPLEMENT_TEXT_LAYER", ""
+).lower() in _truthy
+
+# Celery prefork + PyTorch MPS on macOS → SIGABRT; default cpu.
 EMBEDDING_DEVICE = os.environ.get("EMBEDDING_DEVICE", "cpu")
