@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -39,17 +39,43 @@ def generate_tags(text: str) -> list[str]:
     return tags
 
 
+def _script_tilt_iso(text: str) -> Optional[str]:
+    """If Unicode counts strongly favour one script, return ISO code for chunk metadata."""
+    dev = sum(1 for c in text if "\u0900" <= c <= "\u097f")
+    lat = sum(1 for c in text if ("a" <= c <= "z") or ("A" <= c <= "Z"))
+    if dev + lat < 4:
+        return None
+    if dev >= 8 and dev >= lat * 1.35:
+        return "hi"
+    if lat >= 8 and lat >= dev * 1.35:
+        return "en"
+    return None
+
+
 def detect_language(text: str) -> str:
-    """Best-effort ISO-639-1 language code, `unknown` on failure."""
-    if not text or len(text.strip()) < 20:
+    """Per-chunk ISO-639-1 guess: Unicode script tilt + langdetect when enough text."""
+    text = (text or "").strip()
+    if not text:
         return "unknown"
+    tilt = _script_tilt_iso(text)
+    if len(text) < 18:
+        return tilt or "unknown"
     try:
-        from langdetect import DetectorFactory, detect
+        from langdetect import DetectorFactory, detect_langs
 
         DetectorFactory.seed = 0
-        return detect(text)
+        langs = detect_langs(text)
     except Exception:
-        return "unknown"
+        return tilt or "unknown"
+    if not langs:
+        return tilt or "unknown"
+    best = langs[0]
+    if best.prob >= 0.92:
+        return best.lang
+    if tilt in ("hi", "en") and best.lang in ("hi", "en") and tilt != best.lang:
+        if best.prob < 0.72:
+            return tilt
+    return best.lang
 
 
 def _split_sentences(text: str) -> list[str]:

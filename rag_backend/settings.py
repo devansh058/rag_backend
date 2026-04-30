@@ -141,6 +141,18 @@ TESSERACT_LANG = os.environ.get("TESSERACT_LANG", "").strip()
 PDF_OCR_SUPPLEMENT_TEXT_LAYER = os.environ.get(
     "PDF_OCR_SUPPLEMENT_TEXT_LAYER", ""
 ).lower() in _truthy
+# Split each rasterized page into N horizontal bands (top→bottom); OSD/lang runs per band.
+# Helps mixed layouts (e.g. English header + Hindi body). 1 = one OCR pass per page (default).
+try:
+    TESSERACT_HORIZONTAL_STRIPS = max(
+        1,
+        min(
+            16,
+            int(os.environ.get("TESSERACT_HORIZONTAL_STRIPS", "5").strip() or "5"),
+        ),
+    )
+except ValueError:
+    TESSERACT_HORIZONTAL_STRIPS = 1
 
 # Celery prefork + PyTorch MPS on macOS → SIGABRT; default cpu.
 EMBEDDING_DEVICE = os.environ.get("EMBEDDING_DEVICE", "cpu")

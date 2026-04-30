@@ -3,6 +3,8 @@
 OCR language selection:
 - By default, Tesseract OSD (orientation / script detection) picks a script, we map
   it to `lang=` codes and filter by what `tesseract --list-langs` reports as installed.
+- Set TESSERACT_HORIZONTAL_STRIPS>1 to run OSD separately on horizontal bands (mixed
+  English + Hindi scans). Chunk `language` is still set per chunk in the chunker.
 - Set TESSERACT_LANG=eng+deu (example) to skip OSD and force those packs.
 """
 from __future__ import annotations
@@ -229,6 +231,53 @@ def _ocr_pil_image(img: Any) -> str:
     return ""
 
 
+def _horizontal_page_crops(img: Any, n_strips: int, min_strip_h: int = 56) -> list[Any]:
+    """Non-overlapping horizontal bands, top to bottom. Falls back to a single crop."""
+    w, h = img.size
+    if n_strips <= 1 or h < min_strip_h * 2:
+        return [img]
+    n = min(n_strips, max(1, h // min_strip_h))
+    if n <= 1:
+        return [img]
+    bands: list[Any] = []
+    band_h = h // n
+    for i in range(n):
+        y0 = i * band_h
+        y1 = h if i == n - 1 else (i + 1) * band_h
+        crop = img.crop((0, y0, w, y1))
+        if crop.height >= min_strip_h // 2:
+            bands.append(crop)
+    return bands or [img]
+
+
+def ocr_page_image(img: Any) -> str:
+    """OCR a full page; may run several independent OCR passes on horizontal strips.
+
+    Each strip gets its own OSD → language choice, which improves mixed-script scans
+    (e.g. Latin title block + Devanagari body) without manual TESSERACT_LANG.
+    """
+    try:
+        from django.conf import settings
+
+        n_strips = int(getattr(settings, "TESSERACT_HORIZONTAL_STRIPS", 1))
+    except (TypeError, ValueError):
+        n_strips = 1
+    n_strips = max(1, min(16, n_strips))
+
+    crops = _horizontal_page_crops(img, n_strips)
+    if len(crops) <= 1:
+        return _ocr_pil_image(img)
+
+    parts: list[str] = []
+    for idx, crop in enumerate(crops):
+        block = _ocr_pil_image(crop).strip()
+        if block:
+            parts.append(block)
+        logger.debug("OCR strip %d/%d chars=%d", idx + 1, len(crops), len(block))
+
+    return "\n\n".join(parts)
+
+
 def _pdf_ocr_supplement() -> bool:
     _, _, _, supple = _settings_tesseract()
     return supple
@@ -277,7 +326,7 @@ def _iter_pdf(path: str) -> Iterator[dict[str, Any]]:
                     img = Image.open(BytesIO(pix.tobytes("png")))
                     if img.mode not in ("RGB", "L"):
                         img = img.convert("RGB")
-                    ocr_txt = _ocr_pil_image(img)
+                    ocr_txt = ocr_page_image(img)
                     if ocr_supplement and raw and raw.strip():
                         raw = (raw.rstrip() + "\n\n" + ocr_txt).strip()
                     else:
@@ -299,7 +348,7 @@ def _iter_image(path: str) -> Iterator[dict[str, Any]]:
     image = Image.open(path)
     if image.mode not in ("RGB", "L"):
         image = image.convert("RGB")
-    raw = _ocr_pil_image(image) or ""
+    raw = ocr_page_image(image) or ""
     cleaned = clean_text(raw)
     if cleaned:
         yield {"page": 0, "text": cleaned}
