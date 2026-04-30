@@ -1,8 +1,10 @@
 """Extraction with junk-removal and page-by-page streaming.
 
 OCR language selection:
-- By default, Tesseract OSD (orientation / script detection) picks a script, we map
-  it to `lang=` codes and filter by what `tesseract --list-langs` reports as installed.
+- Pages are deskewed first using OSD `rotate` (0/90/180/270). Without this, sideways
+  Latin is often misclassified as Cyrillic or other scripts and OCR quality collapses.
+- By default, Tesseract OSD then picks a script on the upright image, we map it to
+  `lang=` codes and filter by what `tesseract --list-langs` reports as installed.
 - Set TESSERACT_HORIZONTAL_STRIPS>1 to run OSD separately on horizontal bands (mixed
   English + Hindi scans). Chunk `language` is still set per chunk in the chunker.
 - Set TESSERACT_LANG=eng+deu (example) to skip OSD and force those packs.
@@ -107,6 +109,39 @@ def _filter_installed_lang_spec(lang_spec: str, installed: frozenset[str]) -> st
         return ""
     parts = [p.strip() for p in lang_spec.split("+") if p.strip() and p.strip() in installed]
     return "+".join(parts)
+
+
+def _deskew_with_osd(image: Any) -> Any:
+    """Apply Tesseract OSD rotation so text reads horizontally.
+
+    Script detection on a sideways page is unreliable (e.g. Latin → Cyrillic).
+    Uses the ``rotate`` field from ``image_to_osd`` (same sign as Pillow ``Image.rotate``).
+    """
+    import pytesseract
+    from pytesseract import Output
+
+    try:
+        osd = pytesseract.image_to_osd(image, output_type=Output.DICT)
+    except pytesseract.TesseractError as exc:
+        logger.debug("OSD deskew skipped: %s", exc)
+        return image
+    except Exception:
+        logger.warning("OSD deskew unexpected error", exc_info=True)
+        return image
+
+    try:
+        rot = int(osd.get("rotate") or 0) % 360
+    except (TypeError, ValueError):
+        return image
+    if rot == 0:
+        return image
+    oconf = float(osd.get("orientation_conf") or 0.0)
+    logger.info(
+        "OCR deskew: rotate=%d° (orientation_conf=%.2f)",
+        rot,
+        oconf,
+    )
+    return image.copy().rotate(rot, expand=True, fillcolor="white")
 
 
 def _osd_script_for_image(image: Any) -> tuple[Optional[str], float]:
@@ -253,9 +288,11 @@ def _horizontal_page_crops(img: Any, n_strips: int, min_strip_h: int = 56) -> li
 def ocr_page_image(img: Any) -> str:
     """OCR a full page; may run several independent OCR passes on horizontal strips.
 
-    Each strip gets its own OSD → language choice, which improves mixed-script scans
-    (e.g. Latin title block + Devanagari body) without manual TESSERACT_LANG.
+    Deskew runs once on the full raster (PDF ``/Rotate`` and skewed scans), then each
+    strip gets its own OSD → language choice for mixed-script layouts.
     """
+    img = _deskew_with_osd(img)
+
     try:
         from django.conf import settings
 
