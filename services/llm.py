@@ -1,7 +1,10 @@
-"""Gemini-backed answer generation for the construction RAG assistant."""
+"""Answer generation for the construction RAG assistant (Gemini or local Ollama)."""
 from __future__ import annotations
 
+import json
 import logging
+import urllib.error
+import urllib.request
 from typing import Any, Optional
 
 from django.conf import settings
@@ -30,7 +33,7 @@ SYSTEM_INSTRUCTION = (
 _client = None
 
 
-def _get_client():
+def _get_gemini_client():
     global _client
     if _client is not None:
         return _client
@@ -112,30 +115,62 @@ def _fallback_answer(query: str, contexts: list[dict[str, Any]]) -> str:
         bullets.append(f"[{i}] {title} (page {c.get('page', '?')}): {snippet}")
     joined = "\n".join(bullets)
     return (
-        f"(Gemini not configured — returning extractive summary for: \"{query}\")\n\n"
+        f"(Answer model unavailable — extractive summary for: \"{query}\")\n\n"
         f"{joined}"
     )
 
 
-def generate_answer(
-    query: str,
-    contexts: list[dict[str, Any]],
-    project: Optional[dict[str, Any]] = None,
-) -> str:
-    """Generate a construction-domain answer with Gemini, falling back to an
-    extractive summary if Gemini is not configured or errors out."""
-    client = _get_client()
-    if client is None:
-        return _fallback_answer(query, contexts)
-
-    model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
-    max_tokens = getattr(settings, "GEMINI_MAX_OUTPUT_TOKENS", 2048)
+def _generate_ollama(
+    prompt: str,
+    *,
+    max_tokens: int,
+) -> Optional[str]:
+    base = getattr(settings, "OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+    model = (getattr(settings, "OLLAMA_MODEL", "") or "llama3").strip()
+    timeout = int(getattr(settings, "OLLAMA_TIMEOUT_SEC", 300))
+    url = f"{base}/api/chat"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_INSTRUCTION},
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+        "options": {
+            "temperature": 0.35,
+            "num_predict": max_tokens,
+        },
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     try:
-        max_tokens = int(max_tokens)
-    except (TypeError, ValueError):
-        max_tokens = 2048
-    prompt = _build_user_prompt(query, contexts, project=project)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.load(resp)
+    except urllib.error.HTTPError as exc:
+        logger.warning("Ollama HTTP error %s: %s", exc.code, exc.read().decode("utf-8", errors="replace")[:500])
+        return None
+    except urllib.error.URLError as exc:
+        logger.warning("Ollama connection failed (is `ollama serve` running?): %s", exc.reason)
+        return None
+    except Exception:
+        logger.exception("Ollama request failed")
+        return None
 
+    msg = body.get("message") or {}
+    text = (msg.get("content") or "").strip()
+    return text or None
+
+
+def _generate_gemini(prompt: str, *, max_tokens: int) -> Optional[str]:
+    client = _get_gemini_client()
+    if client is None:
+        return None
+    model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
     try:
         from google.genai import types
 
@@ -149,9 +184,43 @@ def generate_answer(
             ),
         )
         text = (getattr(response, "text", "") or "").strip()
-        if not text:
-            return _fallback_answer(query, contexts)
-        return text
+        return text or None
     except Exception:
         logger.exception("Gemini generate_content failed")
+        return None
+
+
+def generate_answer(
+    query: str,
+    contexts: list[dict[str, Any]],
+    project: Optional[dict[str, Any]] = None,
+) -> str:
+    """Generate a construction-domain answer via Ollama or Gemini, else extractive fallback."""
+    provider = getattr(settings, "LLM_PROVIDER", "gemini") or "gemini"
+    provider = str(provider).strip().lower()
+
+    max_tokens_gemini = getattr(settings, "GEMINI_MAX_OUTPUT_TOKENS", 2048)
+    try:
+        max_tokens_gemini = int(max_tokens_gemini)
+    except (TypeError, ValueError):
+        max_tokens_gemini = 2048
+
+    max_tokens_ollama = getattr(settings, "OLLAMA_NUM_PREDICT", 2048)
+    try:
+        max_tokens_ollama = int(max_tokens_ollama)
+    except (TypeError, ValueError):
+        max_tokens_ollama = 2048
+
+    prompt = _build_user_prompt(query, contexts, project=project)
+
+    if provider == "ollama":
+        text = _generate_ollama(prompt, max_tokens=max_tokens_ollama)
+        if text:
+            logger.info("Ollama answer ok (model=%s)", getattr(settings, "OLLAMA_MODEL", ""))
+            return text
         return _fallback_answer(query, contexts)
+
+    text = _generate_gemini(prompt, max_tokens=max_tokens_gemini)
+    if text:
+        return text
+    return _fallback_answer(query, contexts)

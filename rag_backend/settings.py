@@ -119,9 +119,25 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_IMPORTS = ("workers.tasks",)
 CELERY_TASK_ALWAYS_EAGER = os.environ.get("CELERY_TASK_ALWAYS_EAGER", "").lower() in ("1", "true", "yes")
 
+# LLM: "gemini" (cloud) or "ollama" (local). Ollama must be running (e.g. ollama serve).
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "2048"))
+
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip().rstrip("/")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3").strip()
+try:
+    OLLAMA_NUM_PREDICT = max(
+        64,
+        min(32768, int(os.environ.get("OLLAMA_NUM_PREDICT", "2048").strip() or "2048")),
+    )
+except ValueError:
+    OLLAMA_NUM_PREDICT = 2048
+try:
+    OLLAMA_TIMEOUT_SEC = max(30, int(os.environ.get("OLLAMA_TIMEOUT_SEC", "300").strip() or "300"))
+except ValueError:
+    OLLAMA_TIMEOUT_SEC = 300
 
 VECTOR_DIMENSIONS = 384  # all-MiniLM-L6-v2
 
